@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/i-rocky/docker-win-networking/version"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"io"
 	"log"
@@ -22,12 +22,23 @@ import (
 
 const TunnelConf = `[Interface]
 PrivateKey = %s
+Address = %s/32
 ListenPort = %d
+DNS = 1.1.1.1, 8.8.8.8
 
 [Peer]
 PublicKey = %s
-AllowedIPs = 0.0.0.0/0, %s
+AllowedIPs = %s
+PersistentKeepalive = 25
 `
+
+type Version struct {
+	SetupImage string
+}
+
+var version = Version{
+	SetupImage: "wpkpda/docker-win-net-setup",
+}
 
 type Wireguard struct {
 	docker         *Docker
@@ -48,6 +59,9 @@ type WireguardOptions struct {
 	Port          int
 }
 
+//go:embed bin/wg.exe bin/wireguard.exe
+var binaries embed.FS
+
 func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 	hostPrivateKey, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
@@ -64,14 +78,6 @@ func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 		return nil, errors.New("failed to parse VM peer CIDR: " + err.Error())
 	}
 
-	log.Printf("Host private key: %v", hostPrivateKey.String())
-	log.Printf("Host Public key: %v", hostPrivateKey.PublicKey().String())
-	log.Printf("Host Peer IP: %v", opts.HostPeerIp)
-	log.Printf("VM private key: %v", vmPrivateKey.String())
-	log.Printf("VM Public key: %v", vmPrivateKey.PublicKey().String())
-	log.Printf("VM Peer IP: %v", opts.VmPeerIp)
-	log.Printf("VM IPNet: %v", vmIpNet.String())
-
 	return &Wireguard{
 		docker:         docker,
 		interfaceName:  opts.InterfaceName,
@@ -85,7 +91,12 @@ func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 }
 
 func (w *Wireguard) Setup() error {
-	err := w.downloadSetup()
+	err := w.extractBinaries()
+	if err != nil {
+		return errors.New("failed to extract binaries: " + err.Error())
+	}
+
+	err = w.downloadSetup()
 	if err != nil {
 		return errors.New("failed to download setup: " + err.Error())
 	}
@@ -95,9 +106,21 @@ func (w *Wireguard) Setup() error {
 		return errors.New("failed to install tunnel: " + err.Error())
 	}
 
+	time.Sleep(1 * time.Second)
+
 	err = w.updateInterface()
 	if err != nil {
 		return errors.New("failed to update interface: " + err.Error())
+	}
+
+	err = w.findInterfaceIndex()
+	if err != nil {
+		return errors.New("failed to find interface index: " + err.Error())
+	}
+
+	err = w.deleteWireguardRoute()
+	if err != nil {
+		return errors.New("failed to delete wireguard route: " + err.Error())
 	}
 
 	return nil
@@ -107,6 +130,50 @@ func (w *Wireguard) Teardown() error {
 	err := w.uninstallTunnel()
 	if err != nil {
 		return errors.New("failed to uninstall tunnel: " + err.Error())
+	}
+
+	return nil
+}
+
+func (w *Wireguard) extractBinaries() error {
+	files := 0
+	_, err := os.Stat("bin/wg.exe")
+	if err == nil {
+		files++
+	}
+
+	_, err = os.Stat("bin/wireguard.exe")
+	if err == nil {
+		files++
+	}
+
+	if files == 2 {
+		return nil
+	}
+
+	err = os.MkdirAll("bin", 0755)
+	if err != nil {
+		return errors.New("failed to create bin directory: " + err.Error())
+	}
+
+	wg, err := binaries.ReadFile("bin/wg.exe")
+	if err != nil {
+		return errors.New("failed to open wg.exe: " + err.Error())
+	}
+
+	err = os.WriteFile("bin/wg.exe", wg, 0755)
+	if err != nil {
+		return errors.New("failed to write wg.exe: " + err.Error())
+	}
+
+	wireguard, err := binaries.ReadFile("bin/wireguard.exe")
+	if err != nil {
+		return errors.New("failed to open wireguard.exe: " + err.Error())
+	}
+
+	err = os.WriteFile("bin/wireguard.exe", wireguard, 0755)
+	if err != nil {
+		return errors.New("failed to write wireguard.exe: " + err.Error())
 	}
 
 	return nil
@@ -128,7 +195,7 @@ func (w *Wireguard) getTunnelConf() (string, error) {
 		return "", errors.New("failed to get docker networks: " + err.Error())
 	}
 
-	return fmt.Sprintf(TunnelConf, w.hostPrivateKey, w.port, w.vmPrivateKey, networks), nil
+	return fmt.Sprintf(TunnelConf, w.hostPrivateKey.String(), w.hostPeerIp, w.port, w.vmPrivateKey.PublicKey().String(), networks), nil
 }
 
 func (w *Wireguard) getTunnelPath() (string, error) {
@@ -163,25 +230,10 @@ func (w *Wireguard) installTunnel() error {
 		return errors.New("failed to install tunnel: " + err.Error())
 	}
 
-	time.Sleep(1 * time.Second)
-
-	err = w.findInterfaceId()
-	if err != nil {
-		return errors.New("failed to find interface ID: " + err.Error())
-	}
-
-	//go func() {
-	//	time.Sleep(2 * time.Second)
-	//	err = w.deleteWireguardRoute()
-	//	if err != nil {
-	//		log.Printf(err.Error())
-	//	}
-	//}()
-
 	return nil
 }
 
-func (w *Wireguard) findInterfaceId() error {
+func (w *Wireguard) findInterfaceIndex() error {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return err
@@ -226,10 +278,13 @@ func (w *Wireguard) updateInterface() error {
 
 func (w *Wireguard) runCommand(command string, args ...string) error {
 	cmd := exec.Command(command, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	err := cmd.Run()
 
-	return cmd.Run()
+	if err != nil {
+		return errors.New("error running command " + err.Error())
+	}
+
+	return nil
 }
 
 func (w *Wireguard) downloadSetup() error {
@@ -237,12 +292,10 @@ func (w *Wireguard) downloadSetup() error {
 	if err != nil {
 		log.Printf("Setup image doesn't exist locally. Pulling...\n")
 
-		pullStream, err := w.docker.cli.ImagePull(w.docker.ctx, version.SetupImage, types.ImagePullOptions{})
+		_, err := w.docker.cli.ImagePull(w.docker.ctx, version.SetupImage, types.ImagePullOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to pull setup image: %w", err)
 		}
-
-		_, _ = io.Copy(os.Stdout, pullStream)
 	}
 
 	return nil
@@ -289,11 +342,6 @@ func (w *Wireguard) SetupVM() error {
 			}
 		}(reader)
 
-		_, err = stdcopy.StdCopy(os.Stdout, os.Stderr, reader)
-		if err != nil {
-			return err
-		}
-
 		return nil
 	}()
 	if err != nil {
@@ -305,7 +353,7 @@ func (w *Wireguard) SetupVM() error {
 	return nil
 }
 
-func (w *Wireguard) Start() {
+func (w *Wireguard) Start(ctx context.Context) (stop bool) {
 	msgs, errsChan := w.docker.cli.Events(w.docker.ctx, types.EventsOptions{
 		Filters: filters.NewArgs(
 			filters.Arg("type", "network"),
@@ -339,8 +387,15 @@ func (w *Wireguard) Start() {
 				}
 				continue
 			}
+		case <-ctx.Done():
+			log.Printf("Context cancelled\n")
+			loop = false
+
+			return true
 		}
 	}
+
+	return false
 }
 
 func (w *Wireguard) Restart() error {
@@ -353,12 +408,6 @@ func (w *Wireguard) Restart() error {
 	err = w.Setup()
 	if err != nil {
 		log.Printf("Error setting up tunnel: %v\n", err)
-		return err
-	}
-
-	err = w.SetupVM()
-	if err != nil {
-		log.Printf("Error setting up VM: %v\n", err)
 		return err
 	}
 

@@ -1,12 +1,11 @@
 package main
 
 import (
-	"context"
+	"flag"
+	"golang.org/x/sys/windows/svc"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
+	"strings"
 )
 
 const (
@@ -14,83 +13,53 @@ const (
 )
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
+	genWinres := flag.Bool("winres", false, "Generate Windows resources")
+	flag.Parse()
 
-	docker, err := NewDocker(ctx)
+	if *genWinres {
+		generateWinres()
+		os.Exit(0)
+	}
+
+	svcName := "docker-win-net-connect"
+
+	inService, err := svc.IsWindowsService()
 	if err != nil {
-		log.Printf("Failed to create Docker client: %v", err)
-		os.Exit(ExitSetupFailed)
+		log.Fatalf("failed to determine if we are running in service: %v", err)
 	}
-	defer func() {
-		err = docker.Close()
-		if err != nil {
-			log.Printf("Failed to close Docker client: %v", err)
-		}
-	}()
-
-	wireguardOpts := &WireguardOptions{
-		InterfaceName: "docker-win-net-connect",
-		HostPeerIp:    "10.33.33.1",
-		VmPeerIp:      "10.33.33.2",
-		Port:          3333,
+	if inService {
+		runService(svcName, false)
+		return
 	}
 
-	wireguard, err := NewWireguard(docker, wireguardOpts)
+	if len(os.Args) < 2 {
+		log.Printf("Usage: %s <command>", os.Args[0])
+	}
+
+	installer := NewInstaller(os.Args[0], svcName, "Docker network hacking service")
+	manager := NewManager(svcName)
+
+	cmd := strings.ToLower(os.Args[1])
+	switch cmd {
+	case "debug":
+		runService(svcName, true)
+		return
+	case "install":
+		err = installer.InstallService()
+	case "remove", "uninstall":
+		err = installer.RemoveService()
+	case "start":
+		err = manager.StartService()
+	case "stop":
+		err = manager.ControlService(svc.Stop, svc.Stopped)
+	case "pause":
+		err = manager.ControlService(svc.Pause, svc.Paused)
+	case "continue":
+		err = manager.ControlService(svc.Continue, svc.Running)
+	default:
+		log.Printf("invalid command %s", cmd)
+	}
 	if err != nil {
-		log.Printf("Failed to create Wireguard: %v", err)
-		os.Exit(ExitSetupFailed)
+		log.Fatalf("failed to %s %s: %v", cmd, svcName, err)
 	}
-
-	err = wireguard.Setup()
-	if err != nil {
-		log.Printf("Failed to setup Wireguard: %v", err)
-		os.Exit(ExitSetupFailed)
-	}
-	defer func() {
-		err = wireguard.Teardown()
-		if err != nil {
-			log.Printf("Failed to teardown Wireguard: %v", err)
-		}
-	}()
-
-	log.Printf("Wireguard server listening\n")
-
-	go func() {
-		for {
-			log.Printf("Setting up Wireguard on Docker Desktop VM\n")
-			err = wireguard.SetupVM()
-			if err != nil {
-				log.Printf("Failed to setup VM: %v", err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			log.Printf("Watching Docker events\n")
-			wireguard.Start()
-
-			time.Sleep(1 * time.Second)
-		}
-	}()
-
-	term := make(chan os.Signal, 1)
-	errs := make(chan error, 1)
-	exit := make(chan bool, 1)
-	signal.Notify(term, syscall.SIGTERM)
-	signal.Notify(term, os.Interrupt)
-
-	go func() {
-		select {
-		case <-term:
-		case <-errs:
-		}
-
-		log.Printf("Shutting down\n")
-		cancel()
-
-		exit <- true
-	}()
-
-	<-exit
-
-	log.Printf("Shutting down\n")
 }
