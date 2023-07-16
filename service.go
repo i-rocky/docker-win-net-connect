@@ -114,7 +114,10 @@ func (i *Installer) InstallService() error {
 		_ = s.Close()
 		return fmt.Errorf("service %s already exists", i.name)
 	}
-	s, err = m.CreateService(i.name, i.path, mgr.Config{DisplayName: i.desc}, "is", "auto-started")
+	s, err = m.CreateService(i.name, i.path, mgr.Config{
+		DisplayName: i.desc,
+		StartType:   mgr.StartAutomatic,
+	}, "is", "auto-started")
 	if err != nil {
 		return err
 	}
