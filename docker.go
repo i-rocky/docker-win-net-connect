@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
+	"strings"
+	"time"
 )
 
 type Docker struct {
@@ -48,4 +52,36 @@ func (d *Docker) GetSubnets() ([]string, error) {
 	}
 
 	return subnets, nil
+}
+
+func (d *Docker) WaitRunning() error {
+	var counter time.Duration = 0
+	var waitTime time.Duration = 0
+	timer := time.NewTimer(waitTime)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			_, err := d.cli.Info(context.Background())
+			if err == nil {
+				return nil
+			}
+
+			if strings.Contains(err.Error(), "pipe") && strings.Contains(err.Error(), "docker_engine") {
+				waitTime = time.Second * counter * 20
+				if counter > 30 {
+					waitTime = 600
+				}
+				_ = elog.Info(1, fmt.Sprintf("Docker not running. Checking again in %f seconds...", waitTime.Seconds()))
+				counter++
+				timer.Reset(waitTime)
+				continue
+			}
+
+			return errors.New("something went wrong")
+		case <-d.ctx.Done():
+			return errors.New("context cancelled")
+		}
+	}
 }

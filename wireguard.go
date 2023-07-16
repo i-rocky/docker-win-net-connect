@@ -288,9 +288,14 @@ func (w *Wireguard) runCommand(command string, args ...string) error {
 }
 
 func (w *Wireguard) downloadSetup() error {
-	_, _, err := w.docker.cli.ImageInspectWithRaw(w.docker.ctx, version.SetupImage)
+	err := w.docker.WaitRunning()
 	if err != nil {
-		log.Printf("Setup image doesn't exist locally. Pulling...\n")
+		return err
+	}
+
+	_, _, err = w.docker.cli.ImageInspectWithRaw(w.docker.ctx, version.SetupImage)
+	if err != nil {
+		_ = elog.Info(17, "Setup image doesn't exist locally. Pulling...\n")
 
 		_, err := w.docker.cli.ImagePull(w.docker.ctx, version.SetupImage, types.ImagePullOptions{})
 		if err != nil {
@@ -302,6 +307,11 @@ func (w *Wireguard) downloadSetup() error {
 }
 
 func (w *Wireguard) SetupVM() error {
+	err := w.docker.WaitRunning()
+	if err != nil {
+		return err
+	}
+
 	resp, err := w.docker.cli.ContainerCreate(w.docker.ctx, &container.Config{
 		Image: version.SetupImage,
 		Env: []string{
@@ -338,7 +348,7 @@ func (w *Wireguard) SetupVM() error {
 		defer func(reader io.ReadCloser) {
 			err := reader.Close()
 			if err != nil {
-				log.Printf("Failed to close reader: %v", err)
+				_ = elog.Info(18, fmt.Sprintf("Failed to close reader: %v", err))
 			}
 		}(reader)
 
@@ -365,30 +375,30 @@ func (w *Wireguard) Start(ctx context.Context) (stop bool) {
 	for loop := true; loop; {
 		select {
 		case err := <-errsChan:
-			log.Printf("Error: %v\n", err)
+			_ = elog.Info(19, fmt.Sprintf("Error: %v\n", err))
 			loop = false
 		case msg := <-msgs:
 			if msg.Type == "network" && msg.Action == "create" {
-				log.Printf("Network created: %s\n", msg.Actor.Attributes["name"])
-				log.Printf("Restarting tunnel...\n")
+				_ = elog.Info(20, fmt.Sprintf("Network created: %s\n", msg.Actor.Attributes["name"]))
+				_ = elog.Info(21, "Restarting tunnel...\n")
 				err := w.Restart()
 				if err != nil {
-					log.Printf("Error restarting tunnel: %v\n", err)
+					_ = elog.Info(1, fmt.Sprintf("Error restarting tunnel: %v\n", err))
 				}
 				continue
 			}
 
 			if msg.Type == "network" && msg.Action == "destroy" {
-				log.Printf("Network destroyed: %s\n", msg.Actor.Attributes["name"])
-				log.Printf("Restarting tunnel...\n")
+				_ = elog.Info(22, fmt.Sprintf("Network destroyed: %s\n", msg.Actor.Attributes["name"]))
+				_ = elog.Info(23, "Restarting tunnel...\n")
 				err := w.Restart()
 				if err != nil {
-					log.Printf("Error restarting tunnel: %v\n", err)
+					_ = elog.Info(24, fmt.Sprintf("Error restarting tunnel: %v\n", err))
 				}
 				continue
 			}
 		case <-ctx.Done():
-			log.Printf("Context cancelled\n")
+			_ = elog.Info(25, "Context cancelled\n")
 			loop = false
 
 			return true
@@ -401,13 +411,13 @@ func (w *Wireguard) Start(ctx context.Context) (stop bool) {
 func (w *Wireguard) Restart() error {
 	err := w.Teardown()
 	if err != nil {
-		log.Printf("Error tearing down tunnel: %v\n", err)
+		_ = elog.Info(26, fmt.Sprintf("Error tearing down tunnel: %v\n", err))
 		return err
 	}
 
 	err = w.Setup()
 	if err != nil {
-		log.Printf("Error setting up tunnel: %v\n", err)
+		_ = elog.Info(27, fmt.Sprintf("Error setting up tunnel: %v\n", err))
 		return err
 	}
 

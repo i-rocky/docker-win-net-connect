@@ -21,17 +21,17 @@ func runService(name string, isDebug bool) {
 	}
 	defer elog.Close()
 
-	elog.Info(1, fmt.Sprintf("starting %s service", name))
+	_ = elog.Info(2, fmt.Sprintf("starting %s service", name))
 	run := svc.Run
 	if isDebug {
 		run = debug.Run
 	}
 	err = run(name, &VPNService{})
 	if err != nil {
-		elog.Error(1, fmt.Sprintf("%s service failed: %v", name, err))
+		_ = elog.Error(4, fmt.Sprintf("%s service failed: %v", name, err))
 		return
 	}
-	elog.Info(1, fmt.Sprintf("%s service stopped", name))
+	_ = elog.Info(3, fmt.Sprintf("%s service stopped", name))
 }
 
 type Manager struct {
@@ -111,7 +111,7 @@ func (i *Installer) InstallService() error {
 	defer m.Disconnect()
 	s, err := m.OpenService(i.name)
 	if err == nil {
-		s.Close()
+		_ = s.Close()
 		return fmt.Errorf("service %s already exists", i.name)
 	}
 	s, err = m.CreateService(i.name, i.path, mgr.Config{DisplayName: i.desc}, "is", "auto-started")
@@ -121,7 +121,7 @@ func (i *Installer) InstallService() error {
 	defer s.Close()
 	err = eventlog.InstallAsEventCreate(i.name, eventlog.Error|eventlog.Warning|eventlog.Info)
 	if err != nil {
-		s.Delete()
+		_ = s.Delete()
 		return fmt.Errorf("SetupEventLogSource() failed: %s", err)
 	}
 	return nil

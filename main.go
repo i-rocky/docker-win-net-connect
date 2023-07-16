@@ -8,10 +8,6 @@ import (
 	"strings"
 )
 
-const (
-	ExitSetupFailed = 1
-)
-
 func main() {
 	genWinres := flag.Bool("winres", false, "Generate Windows resources")
 	flag.Parse()
