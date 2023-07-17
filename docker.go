@@ -71,7 +71,7 @@ func (d *Docker) WaitRunning() error {
 			if strings.Contains(err.Error(), "pipe") && strings.Contains(err.Error(), "docker_engine") {
 				waitTime = time.Second * counter * 20
 				if counter > 30 {
-					waitTime = 600
+					waitTime = 600 * time.Second
 				}
 				_ = elog.Info(1, fmt.Sprintf("Docker not running. Checking again in %f seconds...", waitTime.Seconds()))
 				counter++
