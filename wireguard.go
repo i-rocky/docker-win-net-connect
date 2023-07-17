@@ -13,7 +13,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -50,6 +49,8 @@ type Wireguard struct {
 	vmPrivateKey   *wgtypes.Key
 	vmIpNet        *net.IPNet
 	port           int
+	networkManager *NetworkManager
+	Utils
 }
 
 type WireguardOptions struct {
@@ -87,20 +88,24 @@ func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 		vmPeerIp:       opts.VmPeerIp,
 		vmIpNet:        vmIpNet,
 		port:           opts.Port,
+		networkManager: NewNetworkManager(opts.InterfaceName),
 	}, nil
 }
 
 func (w *Wireguard) Setup() error {
+	_ = elog.Info(36, "Extracting binaries")
 	err := w.extractBinaries()
 	if err != nil {
 		return errors.New("failed to extract binaries: " + err.Error())
 	}
 
+	_ = elog.Info(37, "Downloading setup image")
 	err = w.downloadSetup()
 	if err != nil {
 		return errors.New("failed to download setup: " + err.Error())
 	}
 
+	_ = elog.Info(38, "Installing tunnel")
 	err = w.installTunnel()
 	if err != nil {
 		return errors.New("failed to install tunnel: " + err.Error())
@@ -108,17 +113,14 @@ func (w *Wireguard) Setup() error {
 
 	time.Sleep(1 * time.Second)
 
-	err = w.updateInterface()
+	_ = elog.Info(39, "Updating interface")
+	err = w.networkManager.UpdateInterface(w.hostPeerIp, w.vmPeerIp)
 	if err != nil {
 		return errors.New("failed to update interface: " + err.Error())
 	}
 
-	err = w.findInterfaceIndex()
-	if err != nil {
-		return errors.New("failed to find interface index: " + err.Error())
-	}
-
-	err = w.deleteWireguardRoute()
+	_ = elog.Info(41, "Deleting wireguard route")
+	err = w.networkManager.DeleteRoute("0.0.0.0")
 	if err != nil {
 		return errors.New("failed to delete wireguard route: " + err.Error())
 	}
@@ -233,55 +235,10 @@ func (w *Wireguard) installTunnel() error {
 	return nil
 }
 
-func (w *Wireguard) findInterfaceIndex() error {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return err
-	}
-
-	for _, i := range interfaces {
-		if i.Name == w.interfaceName {
-			w.interfaceIndex = i.Index
-			break
-		}
-	}
-
-	return err
-}
-
-func (w *Wireguard) deleteWireguardRoute() error {
-	err := w.runCommand("route", "DELETE", "0.0.0.0", "MASK", "0.0.0.0", "IF", strconv.Itoa(w.interfaceIndex))
-	if err != nil {
-		return errors.New("error deleting wireguard route " + err.Error())
-	}
-
-	return nil
-}
-
 func (w *Wireguard) uninstallTunnel() error {
 	err := w.runCommand("wireguard", "/uninstalltunnelservice", w.interfaceName)
 	if err != nil {
 		return errors.New("failed to uninstall tunnel: " + err.Error())
-	}
-
-	return nil
-}
-
-func (w *Wireguard) updateInterface() error {
-	err := w.runCommand("netsh", "interface", "ip", "set", "address", "name="+w.interfaceName, "static", w.hostPeerIp, "255.255.255.255", w.vmPeerIp)
-	if err != nil {
-		return errors.New("error updating interface " + err.Error())
-	}
-
-	return nil
-}
-
-func (w *Wireguard) runCommand(command string, args ...string) error {
-	cmd := exec.Command(command, args...)
-	err := cmd.Run()
-
-	if err != nil {
-		return errors.New("error running command " + err.Error())
 	}
 
 	return nil
@@ -380,8 +337,12 @@ func (w *Wireguard) Start(ctx context.Context) (stop bool) {
 		case msg := <-msgs:
 			if msg.Type == "network" && msg.Action == "create" {
 				_ = elog.Info(20, fmt.Sprintf("Network created: %s\n", msg.Actor.Attributes["name"]))
-				_ = elog.Info(21, "Restarting tunnel...\n")
-				err := w.Restart()
+				network, err := w.docker.cli.NetworkInspect(ctx, msg.Actor.ID, types.NetworkInspectOptions{})
+				if err != nil {
+					_ = elog.Error(21, fmt.Sprintf("Failed to inspect new Docker network: %v", err))
+					continue
+				}
+				err = w.networkManager.AddNetwork(network.ID, network)
 				if err != nil {
 					_ = elog.Info(1, fmt.Sprintf("Error restarting tunnel: %v\n", err))
 				}
@@ -390,8 +351,7 @@ func (w *Wireguard) Start(ctx context.Context) (stop bool) {
 
 			if msg.Type == "network" && msg.Action == "destroy" {
 				_ = elog.Info(22, fmt.Sprintf("Network destroyed: %s\n", msg.Actor.Attributes["name"]))
-				_ = elog.Info(23, "Restarting tunnel...\n")
-				err := w.Restart()
+				err := w.networkManager.RemoveNetwork(msg.Actor.ID)
 				if err != nil {
 					_ = elog.Info(24, fmt.Sprintf("Error restarting tunnel: %v\n", err))
 				}
@@ -406,20 +366,4 @@ func (w *Wireguard) Start(ctx context.Context) (stop bool) {
 	}
 
 	return false
-}
-
-func (w *Wireguard) Restart() error {
-	err := w.Teardown()
-	if err != nil {
-		_ = elog.Info(26, fmt.Sprintf("Error tearing down tunnel: %v\n", err))
-		return err
-	}
-
-	err = w.Setup()
-	if err != nil {
-		_ = elog.Info(27, fmt.Sprintf("Error setting up tunnel: %v\n", err))
-		return err
-	}
-
-	return nil
 }
