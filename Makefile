@@ -1,7 +1,7 @@
 PROJECT         := github.com/i-rocky/docker-win-networking
 
 run:: build
-	sudo ./docker-win-networking
+	sudo ./docker-win-networking debug
 
 build::
 	GOOS="windows";GOARCH="amd64";go build ${PROJECT}
