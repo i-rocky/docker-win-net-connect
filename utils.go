@@ -2,7 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
+	"strings"
 )
 
 type Utils struct {
@@ -13,7 +15,10 @@ func (u *Utils) runCommand(command string, args ...string) error {
 	err := cmd.Run()
 
 	if err != nil {
-		return errors.New("error running command " + err.Error())
+		commandWithArgs := []string{command}
+		commandWithArgs = append(commandWithArgs, args...)
+
+		return errors.New(fmt.Sprintf("error running command: %v, err: %v ", strings.Join(commandWithArgs, " "), err))
 	}
 
 	return nil

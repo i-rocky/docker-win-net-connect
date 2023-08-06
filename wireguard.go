@@ -40,16 +40,18 @@ var version = Version{
 }
 
 type Wireguard struct {
-	docker         *Docker
-	interfaceName  string
-	interfaceIndex int
-	hostPeerIp     string
-	vmPeerIp       string
-	hostPrivateKey *wgtypes.Key
-	vmPrivateKey   *wgtypes.Key
-	vmIpNet        *net.IPNet
-	port           int
-	networkManager *NetworkManager
+	docker          *Docker
+	interfaceName   string
+	interfaceIndex  int
+	hostPeerIp      string
+	vmPeerIp        string
+	hostPrivateKey  *wgtypes.Key
+	vmPrivateKey    *wgtypes.Key
+	vmIpNet         *net.IPNet
+	port            int
+	networkManager  *NetworkManager
+	binDirWg        string
+	binDirWireguard string
 	Utils
 }
 
@@ -80,15 +82,17 @@ func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 	}
 
 	return &Wireguard{
-		docker:         docker,
-		interfaceName:  opts.InterfaceName,
-		hostPrivateKey: &hostPrivateKey,
-		vmPrivateKey:   &vmPrivateKey,
-		hostPeerIp:     opts.HostPeerIp,
-		vmPeerIp:       opts.VmPeerIp,
-		vmIpNet:        vmIpNet,
-		port:           opts.Port,
-		networkManager: NewNetworkManager(opts.InterfaceName),
+		docker:          docker,
+		interfaceName:   opts.InterfaceName,
+		hostPrivateKey:  &hostPrivateKey,
+		vmPrivateKey:    &vmPrivateKey,
+		hostPeerIp:      opts.HostPeerIp,
+		vmPeerIp:        opts.VmPeerIp,
+		vmIpNet:         vmIpNet,
+		port:            opts.Port,
+		networkManager:  NewNetworkManager(opts.InterfaceName),
+		binDirWg:        "bin/wg.exe",
+		binDirWireguard: "bin/wireguard.exe",
 	}, nil
 }
 
@@ -139,12 +143,12 @@ func (w *Wireguard) Teardown() error {
 
 func (w *Wireguard) extractBinaries() error {
 	files := 0
-	_, err := os.Stat("bin/wg.exe")
+	_, err := os.Stat(w.binDirWg)
 	if err == nil {
 		files++
 	}
 
-	_, err = os.Stat("bin/wireguard.exe")
+	_, err = os.Stat(w.binDirWireguard)
 	if err == nil {
 		files++
 	}
@@ -158,22 +162,22 @@ func (w *Wireguard) extractBinaries() error {
 		return errors.New("failed to create bin directory: " + err.Error())
 	}
 
-	wg, err := binaries.ReadFile("bin/wg.exe")
+	wg, err := binaries.ReadFile(w.binDirWg)
 	if err != nil {
 		return errors.New("failed to open wg.exe: " + err.Error())
 	}
 
-	err = os.WriteFile("bin/wg.exe", wg, 0755)
+	err = os.WriteFile(w.binDirWg, wg, 0755)
 	if err != nil {
 		return errors.New("failed to write wg.exe: " + err.Error())
 	}
 
-	wireguard, err := binaries.ReadFile("bin/wireguard.exe")
+	wireguard, err := binaries.ReadFile(w.binDirWireguard)
 	if err != nil {
 		return errors.New("failed to open wireguard.exe: " + err.Error())
 	}
 
-	err = os.WriteFile("bin/wireguard.exe", wireguard, 0755)
+	err = os.WriteFile(w.binDirWireguard, wireguard, 0755)
 	if err != nil {
 		return errors.New("failed to write wireguard.exe: " + err.Error())
 	}
@@ -227,7 +231,7 @@ func (w *Wireguard) installTunnel() error {
 		return errors.New("failed to get tunnel path: " + err.Error())
 	}
 
-	err = w.runCommand("wireguard", "/installtunnelservice", tunnelPath)
+	err = w.runCommand(w.binDirWireguard, "/installtunnelservice", tunnelPath)
 	if err != nil {
 		return errors.New("failed to install tunnel: " + err.Error())
 	}
@@ -236,7 +240,7 @@ func (w *Wireguard) installTunnel() error {
 }
 
 func (w *Wireguard) uninstallTunnel() error {
-	err := w.runCommand("wireguard", "/uninstalltunnelservice", w.interfaceName)
+	err := w.runCommand(w.binDirWireguard, "/uninstalltunnelservice", w.interfaceName)
 	if err != nil {
 		return errors.New("failed to uninstall tunnel: " + err.Error())
 	}
