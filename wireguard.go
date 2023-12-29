@@ -173,7 +173,7 @@ func (w *Wireguard) extractBinaries() error {
 		return nil
 	}
 
-	err = os.MkdirAll(filepath.Dir(w.binDirWg), 0755)
+	err = os.MkdirAll(filepath.Dir(w.exBinDirWg), 0755)
 	if err != nil {
 		return errors.New("failed to create bin directory: " + err.Error())
 	}
