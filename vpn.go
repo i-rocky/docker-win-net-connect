@@ -56,12 +56,21 @@ func (m *VPNService) Execute(args []string, r <-chan svc.ChangeRequest, changes 
 	_ = elog.Info(9, fmt.Sprintf("Starting service\n"))
 
 	go func() {
-		err = wireguard.Setup()
-		if err != nil {
-			_ = elog.Info(10, fmt.Sprintf("Failed to setup Wireguard: %v", err))
-			changes <- svc.Status{State: svc.StopPending}
-			cancel()
-			return
+		for {
+			err = wireguard.Setup()
+			if err != nil {
+				_ = elog.Info(10, fmt.Sprintf("Failed to setup Wireguard: %v", err))
+				// break out if we are shutting down
+				timer := time.NewTimer(5 * time.Second)
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+					continue
+				}
+			}
+
+			break
 		}
 
 		_ = elog.Info(11, fmt.Sprintf("Wireguard server listening\n"))

@@ -40,19 +40,21 @@ var version = Version{
 }
 
 type Wireguard struct {
-	docker          *Docker
-	interfaceName   string
-	interfaceIndex  int
-	hostPeerIp      string
-	vmPeerIp        string
-	hostPrivateKey  *wgtypes.Key
-	vmPrivateKey    *wgtypes.Key
-	vmIpNet         *net.IPNet
-	port            int
-	networkManager  *NetworkManager
-	exePath         string
-	binDirWg        string
-	binDirWireguard string
+	docker            *Docker
+	interfaceName     string
+	interfaceIndex    int
+	hostPeerIp        string
+	vmPeerIp          string
+	hostPrivateKey    *wgtypes.Key
+	vmPrivateKey      *wgtypes.Key
+	vmIpNet           *net.IPNet
+	port              int
+	networkManager    *NetworkManager
+	exePath           string
+	binDirWg          string
+	exBinDirWg        string
+	binDirWireguard   string
+	exBinDirWireguard string
 	Utils
 }
 
@@ -120,7 +122,7 @@ func (w *Wireguard) Setup() error {
 	}
 
 	_ = elog.Info(38, "Installing tunnel")
-	err = w.installTunnel()
+	err = w.installTunnel(true)
 	if err != nil {
 		return errors.New("failed to install tunnel: " + err.Error())
 	}
@@ -154,18 +156,16 @@ func (w *Wireguard) Teardown() error {
 func (w *Wireguard) extractBinaries() error {
 	files := 0
 
-	wgBinDir := filepath.Join(w.exePath, w.binDirWg)
-	wireguardBinDir := filepath.Join(w.exePath, w.binDirWireguard)
+	w.exBinDirWg = filepath.Join(w.exePath, w.binDirWg)
+	w.exBinDirWireguard = filepath.Join(w.exePath, w.binDirWireguard)
 
-	_, err := os.Stat(wgBinDir)
+	_, err := os.Stat(w.exBinDirWg)
 	if err == nil {
-		w.binDirWg = wgBinDir
 		files++
 	}
 
-	_, err = os.Stat(wireguardBinDir)
+	_, err = os.Stat(w.exBinDirWireguard)
 	if err == nil {
-		w.binDirWireguard = wireguardBinDir
 		files++
 	}
 
@@ -173,33 +173,30 @@ func (w *Wireguard) extractBinaries() error {
 		return nil
 	}
 
-	err = os.MkdirAll(filepath.Dir(wgBinDir), 0755)
+	err = os.MkdirAll(filepath.Dir(w.binDirWg), 0755)
 	if err != nil {
 		return errors.New("failed to create bin directory: " + err.Error())
 	}
 
-	wg, err := binaries.ReadFile(wgBinDir)
+	wg, err := binaries.ReadFile(w.binDirWg)
 	if err != nil {
 		return errors.New("failed to open wg.exe: " + err.Error())
 	}
 
-	err = os.WriteFile(wgBinDir, wg, 0755)
+	err = os.WriteFile(w.exBinDirWg, wg, 0755)
 	if err != nil {
 		return errors.New("failed to write wg.exe: " + err.Error())
 	}
 
-	wireguard, err := binaries.ReadFile(wireguardBinDir)
+	wireguard, err := binaries.ReadFile(w.binDirWireguard)
 	if err != nil {
 		return errors.New("failed to open wireguard.exe: " + err.Error())
 	}
 
-	err = os.WriteFile(wireguardBinDir, wireguard, 0755)
+	err = os.WriteFile(w.exBinDirWireguard, wireguard, 0755)
 	if err != nil {
 		return errors.New("failed to write wireguard.exe: " + err.Error())
 	}
-
-	w.binDirWg = wgBinDir
-	w.binDirWireguard = wireguardBinDir
 
 	return nil
 }
@@ -239,14 +236,23 @@ func (w *Wireguard) getTunnelPath() (string, error) {
 	return tunnelPath, nil
 }
 
-func (w *Wireguard) installTunnel() error {
+func (w *Wireguard) installTunnel(first bool) error {
 	tunnelPath, err := w.getTunnelPath()
 	if err != nil {
 		return errors.New("failed to get tunnel path: " + err.Error())
 	}
 
-	err = w.runCommand(w.binDirWireguard, "/installtunnelservice", tunnelPath)
+	err = w.runCommand(w.exBinDirWireguard, "/installtunnelservice", tunnelPath)
 	if err != nil {
+		if first && strings.Contains(err.Error(), "Tunnel already installed and running") {
+			if err := w.uninstallTunnel(); err != nil {
+				return errors.New("tunnel running, failed to uninstall tunnel: " + err.Error())
+			}
+
+			if err := w.installTunnel(false); err != nil {
+				return errors.New("tunnel was running, stopped but failed to install tunnel: " + err.Error())
+			}
+		}
 		return errors.New("failed to install tunnel: " + err.Error())
 	}
 
@@ -254,7 +260,7 @@ func (w *Wireguard) installTunnel() error {
 }
 
 func (w *Wireguard) uninstallTunnel() error {
-	err := w.runCommand(w.binDirWireguard, "/uninstalltunnelservice", w.interfaceName)
+	err := w.runCommand(w.exBinDirWireguard, "/uninstalltunnelservice", w.interfaceName)
 	if err != nil {
 		return errors.New("failed to uninstall tunnel: " + err.Error())
 	}
