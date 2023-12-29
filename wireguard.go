@@ -50,6 +50,7 @@ type Wireguard struct {
 	vmIpNet         *net.IPNet
 	port            int
 	networkManager  *NetworkManager
+	exePath         string
 	binDirWg        string
 	binDirWireguard string
 	Utils
@@ -81,6 +82,14 @@ func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 		return nil, errors.New("failed to parse VM peer CIDR: " + err.Error())
 	}
 
+	// get the directory where the executable is located
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, errors.New("failed to get executable path: " + err.Error())
+	}
+
+	exePath := filepath.Dir(exe)
+
 	return &Wireguard{
 		docker:          docker,
 		interfaceName:   opts.InterfaceName,
@@ -91,6 +100,7 @@ func NewWireguard(docker *Docker, opts *WireguardOptions) (*Wireguard, error) {
 		vmIpNet:         vmIpNet,
 		port:            opts.Port,
 		networkManager:  NewNetworkManager(opts.InterfaceName),
+		exePath:         exePath,
 		binDirWg:        "bin/wg.exe",
 		binDirWireguard: "bin/wireguard.exe",
 	}, nil
@@ -143,13 +153,19 @@ func (w *Wireguard) Teardown() error {
 
 func (w *Wireguard) extractBinaries() error {
 	files := 0
-	_, err := os.Stat(w.binDirWg)
+
+	wgBinDir := filepath.Join(w.exePath, w.binDirWg)
+	wireguardBinDir := filepath.Join(w.exePath, w.binDirWireguard)
+
+	_, err := os.Stat(wgBinDir)
 	if err == nil {
+		w.binDirWg = wgBinDir
 		files++
 	}
 
-	_, err = os.Stat(w.binDirWireguard)
+	_, err = os.Stat(wireguardBinDir)
 	if err == nil {
+		w.binDirWireguard = wireguardBinDir
 		files++
 	}
 
@@ -157,30 +173,33 @@ func (w *Wireguard) extractBinaries() error {
 		return nil
 	}
 
-	err = os.MkdirAll("bin", 0755)
+	err = os.MkdirAll(filepath.Dir(wgBinDir), 0755)
 	if err != nil {
 		return errors.New("failed to create bin directory: " + err.Error())
 	}
 
-	wg, err := binaries.ReadFile(w.binDirWg)
+	wg, err := binaries.ReadFile(wgBinDir)
 	if err != nil {
 		return errors.New("failed to open wg.exe: " + err.Error())
 	}
 
-	err = os.WriteFile(w.binDirWg, wg, 0755)
+	err = os.WriteFile(wgBinDir, wg, 0755)
 	if err != nil {
 		return errors.New("failed to write wg.exe: " + err.Error())
 	}
 
-	wireguard, err := binaries.ReadFile(w.binDirWireguard)
+	wireguard, err := binaries.ReadFile(wireguardBinDir)
 	if err != nil {
 		return errors.New("failed to open wireguard.exe: " + err.Error())
 	}
 
-	err = os.WriteFile(w.binDirWireguard, wireguard, 0755)
+	err = os.WriteFile(wireguardBinDir, wireguard, 0755)
 	if err != nil {
 		return errors.New("failed to write wireguard.exe: " + err.Error())
 	}
+
+	w.binDirWg = wgBinDir
+	w.binDirWireguard = wireguardBinDir
 
 	return nil
 }
@@ -210,12 +229,7 @@ func (w *Wireguard) getTunnelPath() (string, error) {
 		return "", errors.New("failed to get tunnel config: " + err.Error())
 	}
 
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", errors.New("failed to get current working directory: " + err.Error())
-	}
-
-	tunnelPath := filepath.Join(cwd, fmt.Sprintf("%s.conf", w.interfaceName))
+	tunnelPath := filepath.Join(w.exePath, fmt.Sprintf("%s.conf", w.interfaceName))
 
 	err = os.WriteFile(tunnelPath, []byte(tunnelConf), 0644)
 	if err != nil {
